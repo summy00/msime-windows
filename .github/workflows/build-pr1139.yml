@@ -216,6 +216,7 @@ jobs:
           '-S', 'server', '-B', 'server/build-release', '-G', 'Ninja Multi-Config',
           "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake",
           '-DVCPKG_TARGET_TRIPLET=x64-windows',
+            '-DCMAKE_JOB_POOLS=link_pool=1', '-DCMAKE_JOB_POOL_LINK=link_pool',
           '-DMSIME_PRODUCT_VERSION_OVERRIDE=${{ needs.prepare.outputs.version }}'
         )
         $cmakeArgs += @(./scripts/ci/cmake-sccache-args.ps1 -SetupOutcome '${{ steps.sccache.outcome }}')
