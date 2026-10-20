@@ -1,0 +1,355 @@
+# Fork-only test build. Build steps reuse release.yml; no signing or release publishing.
+name: Build PR 1139 Windows test installer
+'on':
+  push:
+    branches:
+    - build/pr-1143-windows
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      should_publish: 'true'
+      version: 0.11.1
+      target_sha: cfffaf8ca411ff38fe9c860c5bb336840b275455
+      signing_provider: signpath
+    steps:
+    - name: Identify the test build
+      run: echo "Unsigned test installer for PR 1143 / issue 1139, source cfffaf8ca411ff38fe9c860c5bb336840b275455"
+  dependencies:
+    name: Load the release product lock
+    needs: prepare
+    if: ${{ needs.prepare.outputs.should_publish == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      dictionary_tag: ${{ steps.lock.outputs.dictionary_tag }}
+    steps:
+    - name: Read dependencies from the release commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ needs.prepare.outputs.target_sha }}
+        persist-credentials: false
+    - name: Validate and export the product lock
+      id: lock
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        python3 scripts/product_lock.py verify-published
+        python3 scripts/product_lock.py outputs --github-output "$GITHUB_OUTPUT"
+  tsf:
+    name: Build TSF ${{ matrix.name }}
+    needs:
+    - prepare
+    - dependencies
+    if: ${{ needs.prepare.outputs.should_publish == 'true' }}
+    runs-on: windows-2025
+    env:
+      VCPKG_ROOT: ${{ needs.prepare.outputs.signing_provider == 'signpath' && 'C:\vcpkg' || matrix.vcpkg_root }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - name: x64
+          architecture: x64
+          triplet: x64-windows-static
+          build_dir: windows/build64-release
+          vcpkg_root: E:\msime-runner\vcpkg-1
+        - name: Win32
+          architecture: Win32
+          triplet: x86-windows-static
+          build_dir: windows/build32-release
+          vcpkg_root: E:\msime-runner\vcpkg-2
+    steps:
+    - name: Check out release commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ needs.prepare.outputs.target_sha }}
+        submodules: recursive
+        persist-credentials: false
+    - name: Trust the runner workspace
+      shell: pwsh
+      run: |
+        $workspace = $env:GITHUB_WORKSPACE -replace '\\', '/'
+        foreach ($attempt in 1..10) {
+            $trusted = git config --global --get-all safe.directory
+            if ($trusted -contains $workspace) { exit 0 }
+            git config --global --add safe.directory $workspace
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Milliseconds (200 * $attempt)
+        }
+        throw "Could not add $workspace to the global safe.directory list"
+    - name: Stamp the version resource
+      shell: pwsh
+      env:
+        TARGET_VERSION: ${{ needs.prepare.outputs.version }}
+      run: |
+        python scripts/apply_version.py --version $env:TARGET_VERSION
+        python scripts/apply_version.py --version $env:TARGET_VERSION --check
+    - name: Verify the selected vcpkg root
+      shell: pwsh
+      env:
+        EXPECTED_VCPKG_ROOT: ${{ needs.prepare.outputs.signing_provider != 'signpath' && matrix.vcpkg_root || '' }}
+      run: |
+        # On a hosted runner the image's own vcpkg is the expected one.
+        $expected = if ($env:EXPECTED_VCPKG_ROOT) { $env:EXPECTED_VCPKG_ROOT } else { $env:VCPKG_INSTALLATION_ROOT }
+        if ($env:VCPKG_ROOT -ne $expected) {
+          throw "VCPKG_ROOT is '$env:VCPKG_ROOT'; expected '$expected' for ${{ matrix.name }} on runner '$env:RUNNER_NAME'"
+        }
+    - name: Restore dependency binaries
+      if: ${{ needs.prepare.outputs.signing_provider == 'signpath' }}
+      id: vcpkg-cache
+      uses: ./.github/actions/vcpkg-cache
+      with:
+        scope: tip-${{ matrix.triplet }}
+    - name: Install dependencies
+      shell: pwsh
+      working-directory: windows
+      run: |
+        & "$env:VCPKG_ROOT\\vcpkg.exe" install --triplet ${{ matrix.triplet }}
+    - name: Save dependency binaries before compiling
+      if: ${{ needs.prepare.outputs.signing_provider == 'signpath' && steps.vcpkg-cache.outputs.matched-key != format('{0}-complete',
+        steps.vcpkg-cache.outputs.key) }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      with:
+        path: ${{ steps.vcpkg-cache.outputs.path }}
+        key: ${{ steps.vcpkg-cache.outputs.key }}-complete
+    - name: Configure
+      shell: pwsh
+      run: |
+        cmake -S windows -B ${{ matrix.build_dir }} -A ${{ matrix.architecture }} -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+    - name: Build
+      shell: pwsh
+      run: cmake --build ${{ matrix.build_dir }} --config Release --parallel
+    - name: Check the TSF binary and symbols the installer expects
+      shell: pwsh
+      run: ./scripts/ci/check-tsf-dll.ps1 -BuildDir '${{ matrix.build_dir }}'
+    - name: Test the wire contract on this architecture
+      run: ctest --test-dir ${{ matrix.build_dir }} -C Release --output-on-failure
+    - name: Upload the TSF binary and symbols
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: tsf-${{ matrix.name }}
+        path: ${{ matrix.build_dir }}/Release
+        if-no-files-found: error
+        retention-days: 7
+  server:
+    name: Build Server
+    needs:
+    - prepare
+    - dependencies
+    if: ${{ needs.prepare.outputs.should_publish == 'true' }}
+    runs-on: windows-2025
+    env:
+      VCPKG_INSTALLATION_ROOT: ${{ needs.prepare.outputs.signing_provider == 'signpath' && 'C:\vcpkg' || 'E:\\msime-runner\\vcpkg-3'
+        }}
+      SCCACHE_GHA_ENABLED: ${{ needs.prepare.outputs.signing_provider == 'signpath' && 'true' || '' }}
+      SCCACHE_IGNORE_SERVER_IO_ERROR: ${{ needs.prepare.outputs.signing_provider == 'signpath' && '1' || '' }}
+    timeout-minutes: 120
+    steps:
+    - name: Check out release commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ needs.prepare.outputs.target_sha }}
+        submodules: recursive
+        persist-credentials: false
+    - name: Trust the runner workspace
+      shell: pwsh
+      run: |
+        $workspace = $env:GITHUB_WORKSPACE -replace '\\', '/'
+        foreach ($attempt in 1..10) {
+            $trusted = git config --global --get-all safe.directory
+            if ($trusted -contains $workspace) { exit 0 }
+            git config --global --add safe.directory $workspace
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Milliseconds (200 * $attempt)
+        }
+        throw "Could not add $workspace to the global safe.directory list"
+    - name: Verify the hosted vcpkg root
+      if: ${{ needs.prepare.outputs.signing_provider == 'signpath' }}
+      shell: pwsh
+      run: |
+        $onPath = Get-Command vcpkg.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        $imageRoot = if ($onPath) { Split-Path -Parent $onPath.Source } else { '' }
+        if (-not (Test-Path -LiteralPath (Join-Path $env:VCPKG_INSTALLATION_ROOT 'vcpkg.exe') -PathType Leaf) -or
+            $imageRoot -ne $env:VCPKG_INSTALLATION_ROOT) {
+          throw "VCPKG_INSTALLATION_ROOT is '$env:VCPKG_INSTALLATION_ROOT' but the image's vcpkg is at '$imageRoot'"
+        }
+    - name: Restore dependency binaries
+      if: ${{ needs.prepare.outputs.signing_provider == 'signpath' }}
+      id: vcpkg-cache
+      uses: ./.github/actions/vcpkg-cache
+      with:
+        scope: server-x64-windows-and-static-md
+    - name: Set up MSVC environment
+      if: ${{ needs.prepare.outputs.signing_provider == 'signpath' }}
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+    - name: Set up sccache
+      if: ${{ needs.prepare.outputs.signing_provider == 'signpath' }}
+      id: sccache
+      continue-on-error: true
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+    - name: Install Boost
+      shell: pwsh
+      run: ./scripts/ci/install-boost.ps1
+    - name: Save Boost binaries before configuring
+      if: ${{ needs.prepare.outputs.signing_provider == 'signpath' && steps.vcpkg-cache.outputs.matched-key != format('{0}-complete',
+        steps.vcpkg-cache.outputs.key) && steps.vcpkg-cache.outputs.matched-key != format('{0}-boost', steps.vcpkg-cache.outputs.key)
+        }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      with:
+        path: ${{ steps.vcpkg-cache.outputs.path }}
+        key: ${{ steps.vcpkg-cache.outputs.key }}-boost
+    - name: Configure
+      if: ${{ needs.prepare.outputs.signing_provider != 'signpath' }}
+      shell: pwsh
+      run: |
+        cmake -S server -B server/build-release -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DMSIME_PRODUCT_VERSION_OVERRIDE=${{ needs.prepare.outputs.version }}
+    - name: Configure hosted build
+      if: ${{ needs.prepare.outputs.signing_provider == 'signpath' }}
+      shell: pwsh
+      run: |
+        $cmakeArgs = @(
+          '-S', 'server', '-B', 'server/build-release', '-G', 'Ninja Multi-Config',
+          "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake",
+          '-DVCPKG_TARGET_TRIPLET=x64-windows',
+          '-DMSIME_PRODUCT_VERSION_OVERRIDE=${{ needs.prepare.outputs.version }}'
+        )
+        $cmakeArgs += @(./scripts/ci/cmake-sccache-args.ps1 -SetupOutcome '${{ steps.sccache.outcome }}')
+        cmake @cmakeArgs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - name: Save dependency binaries before compiling
+      if: ${{ needs.prepare.outputs.signing_provider == 'signpath' && steps.vcpkg-cache.outputs.matched-key != format('{0}-complete',
+        steps.vcpkg-cache.outputs.key) }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      with:
+        path: ${{ steps.vcpkg-cache.outputs.path }}
+        key: ${{ steps.vcpkg-cache.outputs.key }}-complete
+    - name: Build
+      shell: pwsh
+      run: cmake --build server/build-release --config Release --parallel
+    - name: Report sccache hit rate
+      if: ${{ !cancelled() && needs.prepare.outputs.signing_provider == 'signpath' && steps.sccache.outcome == 'success' }}
+      continue-on-error: true
+      shell: pwsh
+      run: sccache --show-stats
+    - name: Check the binaries the installer requires
+      shell: pwsh
+      run: ./scripts/ci/check-server-binaries.ps1 -BuildDir server/build-release/bin/Release
+    - name: Test Server with the release's exact dictionaries
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: ./scripts/ci/test-server.ps1 -ServerRoot server -StagingRoot "$env:RUNNER_TEMP/product-data" -BuildDir build-release
+    - name: Verify the unsigned development manifest
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $mt = (Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\mt.exe' | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+        if (-not $mt) { throw 'Windows SDK mt.exe not found' }
+        $probe = Join-Path $env:RUNNER_TEMP 'server-development-manifest.xml'
+        & $mt '-inputresource:server/build-release/bin/Release/MetasequoiaImeServer.exe;#1' "-out:$probe"
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to read Server manifest' }
+        [xml]$manifest = Get-Content -LiteralPath $probe -Raw
+        $level = $manifest.SelectSingleNode("//*[local-name()='requestedExecutionLevel']")
+        if (-not $level -or $level.uiAccess -ne 'false' -or $level.level -ne 'asInvoker') { throw 'Unsigned test build requires asInvoker and uiAccess=false' }
+    - name: Upload the Server build
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: server
+        path: server/build-release/bin/Release
+        if-no-files-found: error
+        retention-days: 7
+  package:
+    name: Package unsigned test installer
+    needs:
+    - prepare
+    - dependencies
+    - tsf
+    - server
+    if: ${{ needs.prepare.outputs.should_publish == 'true' }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      DICTIONARY_TAG: ${{ needs.dependencies.outputs.dictionary_tag }}
+      STAGING_ROOT: .
+    steps:
+    - name: Check out the release commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ needs.prepare.outputs.target_sha }}
+        persist-credentials: false
+    - name: Check the hosted Inno Setup can compile the installer
+      if: ${{ needs.prepare.outputs.signing_provider == 'signpath' }}
+      shell: pwsh
+      run: ./scripts/ci/check-inno-language.ps1
+    - name: Download the x64 TSF binary and symbols
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: tsf-x64
+        path: windows/build64-release/Release
+    - name: Download the 32-bit TSF binary and symbols
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: tsf-Win32
+        path: windows/build32-release/Release
+    - name: Download the Server build
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: server
+        path: server/build-release/bin/Release
+    - name: Download the dictionaries
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: bash scripts/ci/download-dictionaries.sh
+    - name: Build the word-lattice language model
+      shell: pwsh
+      run: ./scripts/build-language-model.ps1
+    - name: Download the neural sentence models
+      shell: pwsh
+      run: ./scripts/fetch-neural-model.ps1
+    - name: Collect the installer payload
+      shell: pwsh
+      working-directory: installer
+      env:
+        TARGET_VERSION: ${{ needs.prepare.outputs.version }}
+      run: |
+        pwsh -File ./Prepare-PackageFiles.ps1 -TargetVersion $env:TARGET_VERSION -RepoRoot (Resolve-Path '..').Path -TsfDirectory windows -ServerDirectory server -NoticesDirectory . -HelpCodeDirectory engine/helpcode
+    - name: Embed the exact product dependency manifest
+      env:
+        WINDOWS_COMMIT: ${{ needs.prepare.outputs.target_sha }}
+      run: |
+        python scripts/product_lock.py manifest --windows-commit "$env:WINDOWS_COMMIT" --output installer/app_data/product-manifest.json
+    - name: Compile the test installer
+      shell: pwsh
+      run: ./installer/Compile-Installer.ps1
+    - name: Label the test installer and calculate SHA256
+      shell: pwsh
+      run: |-
+        $ErrorActionPreference = 'Stop'
+        $source = 'installer/Output/MetasequoiaIME_Setup_v0.11.1.exe'
+        $target = 'installer/Output/MetasequoiaIME_Setup_v0.11.1-pr1139-cfffaf8-unsigned.exe'
+        Move-Item -LiteralPath $source -Destination $target
+        $hash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$hash  $([IO.Path]::GetFileName($target))" | Set-Content -Encoding utf8 'installer/Output/SHA256SUMS.txt'
+        @'
+        PR #1143 / issue #1139 test build, source cfffaf8ca411ff38fe9c860c5bb336840b275455.
+        This is an unsigned development installer, not an official release.
+        It uses uiAccess=false and cannot provide input in elevated applications.
+        The installer contains the full dictionaries, models and the new default config template.
+        UI: Settings -> Input -> Whole sentence candidates -> Candidate source badge display style.
+        Windows GUI interaction has not been manually tested.
+        '@ | Set-Content -Encoding utf8 'installer/Output/README.txt'
+    - name: Upload the Windows test installer
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: msime-windows-pr1139-cfffaf8-unsigned
+        path: installer/Output/*
+        if-no-files-found: error
+        retention-days: 7
