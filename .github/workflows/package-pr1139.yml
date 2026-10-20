@@ -1,0 +1,112 @@
+# Fork-only packaging of the already-tested binaries from run 39432592795.
+name: Package PR 1139 Windows test installer
+'on':
+  push:
+    branches:
+    - build/package-pr1139
+  workflow_dispatch: null
+permissions:
+  contents: read
+  actions: read
+jobs:
+  package:
+    name: Package unsigned test installer
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    env:
+      DICTIONARY_TAG: dict-v1.0.0
+      STAGING_ROOT: .
+    steps:
+    - name: Check out the release commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: cfffaf8ca411ff38fe9c860c5bb336840b275455
+        persist-credentials: false
+    - name: Install verified Inno Setup 7.1.0
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $setup = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.0-x64.exe'
+        Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe' -OutFile $setup
+        $expected = '0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f'
+        if ((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'Inno Setup SHA256 mismatch' }
+        $signature = Get-AuthenticodeSignature -FilePath $setup
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Pyrsys') { throw 'Inno Setup publisher signature verification failed' }
+        $destination = Join-Path $env:RUNNER_TEMP 'InnoSetup7'
+        $process = Start-Process -FilePath $setup -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$destination") -Wait -PassThru
+        if ($process.ExitCode -ne 0) { throw "Inno Setup installation failed: $($process.ExitCode)" }
+        if (-not (Test-Path "$destination/ISCC.exe")) { throw 'Inno Setup 7 compiler not found' }
+    - name: Download the x64 TSF binary and symbols
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: tsf-x64
+        path: windows/build64-release/Release
+        run-id: 39432592795
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Download the 32-bit TSF binary and symbols
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: tsf-Win32
+        path: windows/build32-release/Release
+        run-id: 39432592795
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Download the Server build
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: server
+        path: server/build-release/bin/Release
+        run-id: 39432592795
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Download the dictionaries
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: bash scripts/ci/download-dictionaries.sh
+    - name: Build the word-lattice language model
+      shell: pwsh
+      run: ./scripts/build-language-model.ps1
+    - name: Download the neural sentence models
+      shell: pwsh
+      run: ./scripts/fetch-neural-model.ps1
+    - name: Collect the installer payload
+      shell: pwsh
+      working-directory: installer
+      env:
+        TARGET_VERSION: 0.11.1
+      run: |
+        pwsh -File ./Prepare-PackageFiles.ps1 -TargetVersion $env:TARGET_VERSION -RepoRoot (Resolve-Path '..').Path -TsfDirectory windows -ServerDirectory server -NoticesDirectory . -HelpCodeDirectory engine/helpcode
+    - name: Embed the exact product dependency manifest
+      env:
+        WINDOWS_COMMIT: cfffaf8ca411ff38fe9c860c5bb336840b275455
+      run: |
+        python scripts/product_lock.py manifest --windows-commit "$env:WINDOWS_COMMIT" --output installer/app_data/product-manifest.json
+    - name: Compile the test installer
+      shell: pwsh
+      run: ./installer/Compile-Installer.ps1 -IsccPath "$env:RUNNER_TEMP/InnoSetup7/ISCC.exe"
+    - name: Label the test installer and calculate SHA256
+      shell: pwsh
+      run: |-
+        $ErrorActionPreference = 'Stop'
+        $source = 'installer/Output/MetasequoiaIME_Setup_v0.11.1.exe'
+        $target = 'installer/Output/MetasequoiaIME_Setup_v0.11.1-pr1139-cfffaf8-unsigned.exe'
+        Move-Item -LiteralPath $source -Destination $target
+        $hash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$hash  $([IO.Path]::GetFileName($target))" | Set-Content -Encoding utf8 'installer/Output/SHA256SUMS.txt'
+        @'
+        PR #1143 / issue #1139 test build, source cfffaf8ca411ff38fe9c860c5bb336840b275455.
+        This is an unsigned development installer, not an official release.
+        It uses uiAccess=false and cannot provide input in elevated applications.
+        The installer contains the full dictionaries, models and the new default config template.
+        UI: Settings -> Input -> Whole sentence candidates -> Candidate source badge display style.
+        Windows GUI interaction has not been manually tested.
+        '@ | Set-Content -Encoding utf8 'installer/Output/README.txt'
+    - name: Upload the Windows test installer
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: msime-windows-pr1139-cfffaf8-unsigned
+        path: installer/Output/*
+        if-no-files-found: error
+        retention-days: 7
