@@ -141,6 +141,12 @@ size_t CandidateList::GetSelectedIndex() const
     return selectedIndex_;
 }
 
+void CandidateList::SetSelectionVisible(bool visible)
+{
+    selectionVisible_ = visible;
+    InvalidateVisual();
+}
+
 void CandidateList::SetOnSelectionChanged(SelectionChangedHandler handler)
 {
     onSelectionChanged_ = std::move(handler);
@@ -555,7 +561,7 @@ void CandidateList::Render(DeviceResources &deviceResources)
     for (size_t index = 0; index < items_.size(); ++index)
     {
         const RectF itemRect = ItemRect(index);
-        const bool selected = appearance_.selectable && index == selectedIndex_;
+        const bool selected = selectionVisible_ && appearance_.selectable && index == selectedIndex_;
         const bool hovered = hoverEnabled_ && index == hoveredIndex_;
         const bool pressed = pressed_ && index == pressedIndex_;
 
