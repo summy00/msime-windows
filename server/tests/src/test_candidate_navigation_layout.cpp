@@ -36,13 +36,16 @@ struct ExpandedPanel
         grid->SetItems(std::move(items));
         content->SetGap(4.0f);
         content->SetShowGrid(true);
+        msimeui::ScrollViewer::Appearance scrollAppearance;
+        scrollAppearance.reservedWidth = 10.0f;
+        scroller.SetAppearance(scrollAppearance);
         Layout(316.0f);
     }
 
     void Layout(float width)
     {
-        scroller.MeasureInLayout({width, 60.0f});
-        scroller.ArrangeInLayout({17.0f, 23.0f, width, 60.0f});
+        scroller.MeasureInLayout({width + 10.0f, 60.0f});
+        scroller.ArrangeInLayout({17.0f, 23.0f, width + 10.0f, 60.0f});
     }
 
     msimeui::RectF Bounds(int index) const
@@ -167,6 +170,13 @@ TEST_CASE(wechat_scroll_skin_keyboard_targets_match_the_final_scene_layout)
                     {
                         navigation.Reset();
                         const int target = navigation.Target(positions, static_cast<int>(i), key);
+                        if (key == VK_LEFT || key == VK_RIGHT)
+                        {
+                            const int neighbor = static_cast<int>(i) + (key == VK_LEFT ? -1 : 1);
+                            const bool sameRow = neighbor >= 0 && static_cast<size_t>(neighbor) < positions.size() &&
+                                                 std::abs(positions[neighbor].top - positions[i].top) < 0.01f;
+                            REQUIRE_EQ(target, sameRow ? neighbor : -1);
+                        }
                         if (target < 0)
                         {
                             if (key == VK_UP)
