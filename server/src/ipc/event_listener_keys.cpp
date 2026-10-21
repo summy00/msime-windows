@@ -1092,9 +1092,12 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
     {
         const auto &composition = GlobalIme::composition;
         const auto &ui = Global::candidate_ui;
-        arrow_moves_selection = FanyImeIpc::ShouldArrowMoveCandidateSelection(
-            Global::Keycode, composition.caret_position >= composition.raw_input_with_cases.size(),
-            ui.current_page_start() + ui.selected_index_in_page, ui.item_total_count);
+        arrow_moves_selection =
+            Global::candidate_expand_state.load(std::memory_order_acquire) ==
+                FanyImeIpc::CandidateExpandState::Expanded ||
+            FanyImeIpc::ShouldArrowMoveCandidateSelection(
+                Global::Keycode, composition.caret_position >= composition.raw_input_with_cases.size(),
+                ui.current_page_start() + ui.selected_index_in_page, ui.item_total_count);
     }
 
     // 译文页、日期页只认选词和翻页/移动高亮。其它任何键都先把候选框换回原来那一屏，然后照常处理，
@@ -1757,6 +1760,7 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         bool refresh = false;
 
         const auto move_page = [&](int offset, UINT response_type) {
+            ui.arrow_navigation.Reset();
             result = response_type;
             // Keyboard paging keeps the in-page selection where it is; the wheel
             // path in WorkerThread is the one that restarts it at the top.
@@ -1821,6 +1825,26 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
         {
             move_page(1, Global::DataFromServerMsgType::MovePageNext);
         }
+        else if (!IsUiLessMode() && (Global::ModifiersDown & 0b111u) == 0 &&
+                 Global::candidate_expand_state.load(std::memory_order_acquire) ==
+                     FanyImeIpc::CandidateExpandState::Expanded &&
+                 (arrow_moves_selection || (GetConfiguredCandidateArrowNavigationEnabled() &&
+                                            (Global::Keycode == VK_UP || Global::Keycode == VK_DOWN))))
+        {
+            const auto layout =
+                std::atomic_load_explicit(&Global::candidate_navigation_layout, std::memory_order_acquire);
+            // Ignore a stale layout until the UI has arranged this exact candidate list.
+            if (layout && layout->page->page_index == ui.page_index && layout->page->page_words == ui.page_words &&
+                layout->positions.size() == ui.page_words.size())
+            {
+                const int current = ui.selected_index_in_page;
+                const int target = ui.arrow_navigation.Target(layout->positions, current, Global::Keycode);
+                if (target >= 0)
+                    move_selection(target - current, target < current
+                                                         ? Global::DataFromServerMsgType::MoveSelectionPrevious
+                                                         : Global::DataFromServerMsgType::MoveSelectionNext);
+            }
+        }
         else if (arrow_moves_selection)
         {
             if (Global::Keycode == VK_LEFT)
@@ -1844,31 +1868,10 @@ void HandleImeKey(uint64_t client_id, uint64_t activation_epoch, uint64_t reques
                     expected, FanyImeIpc::CandidateExpandState::Collapsed, std::memory_order_acq_rel);
                 expand = false;
             }
-            if (!expand)
+            if (!expand && Global::candidate_expand_state.load(std::memory_order_acquire) !=
+                               FanyImeIpc::CandidateExpandState::Requested)
             {
-                if (!IsUiLessMode() && (Global::ModifiersDown & 0b111u) == 0 &&
-                    Global::candidate_expand_state.load(std::memory_order_acquire) ==
-                        FanyImeIpc::CandidateExpandState::Expanded)
-                {
-                    const auto layout =
-                        std::atomic_load_explicit(&Global::candidate_navigation_layout, std::memory_order_acquire);
-                    const int current = ui.selected_index_in_page;
-                    const int direction = Global::Keycode == VK_UP ? -1 : 1;
-                    const int target =
-                        layout ? FanyImeIpc::CandidateInAdjacentRow(layout->positions, current, direction) : -1;
-                    // Reject geometry from an old page or from before asynchronous candidates moved.
-                    if (layout && layout->page->page_index == ui.page_index && target >= 0 && current >= 0 &&
-                        static_cast<size_t>(target) < ui.page_words.size() &&
-                        static_cast<size_t>(current) < ui.page_words.size() &&
-                        static_cast<size_t>(target) < layout->page->page_words.size() &&
-                        static_cast<size_t>(current) < layout->page->page_words.size() &&
-                        ui.page_words[target] == layout->page->page_words[target] &&
-                        ui.page_words[current] == layout->page->page_words[current])
-                        move_selection(target - current, direction < 0
-                                                             ? Global::DataFromServerMsgType::MoveSelectionPrevious
-                                                             : Global::DataFromServerMsgType::MoveSelectionNext);
-                }
-                else if (Global::Keycode == VK_UP)
+                if (Global::Keycode == VK_UP)
                     move_selection(-1, Global::DataFromServerMsgType::MoveSelectionPrevious);
                 else
                     move_selection(1, Global::DataFromServerMsgType::MoveSelectionNext);
