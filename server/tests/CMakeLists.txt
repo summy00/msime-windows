@@ -53,6 +53,9 @@ set(TEST_SOURCE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/test_ai_assistant_request.cpp"
     "${CMAKE_SOURCE_DIR}/src/ai/ai_assistant_request.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/test_candidate_ui_action_policy.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/test_candidate_navigation_layout.cpp"
+    "${CMAKE_SOURCE_DIR}/src/window/candidate_skin_scene.cpp"
+    "${CMAKE_SOURCE_DIR}/src/window/candidate_skin_overlay.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/test_candidate_translation_policy.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/test_ai_context_policy.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/test_candidate_ui_state.cpp"
@@ -177,6 +180,7 @@ add_dependencies(${TEST_EXECUTABLE_NAME} ${DICTIONARY_REPLAY_EXECUTABLE_NAME})
 
 target_link_libraries(${TEST_EXECUTABLE_NAME}
     PRIVATE
+    msimeui
     MetasequoiaIme::Engine
     MetasequoiaIme::Voice
     nlohmann_json::nlohmann_json

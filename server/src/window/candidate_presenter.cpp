@@ -519,12 +519,7 @@ void CandidatePresenter::UpdateExpandedNavigationLayout()
     }
     auto layout = std::make_shared<Global::CandidateNavigationLayout>();
     layout->page = page;
-    layout->positions.reserve(count);
-    for (size_t i = 0; i < count; ++i)
-    {
-        const auto rect = boundsAt(i);
-        layout->positions.push_back({rect.x + rect.width * 0.5f, rect.y});
-    }
+    layout->positions = impl_->expandContent->NavigationPositions();
     std::shared_ptr<const Global::CandidateNavigationLayout> published = std::move(layout);
     std::atomic_store_explicit(&Global::candidate_navigation_layout, std::move(published), std::memory_order_release);
 }
@@ -1092,7 +1087,6 @@ void CandidatePresenter::ShowFromGlobalState(POINT caret)
             layoutRoot();
         }
     }
-    UpdateExpandedNavigationLayout();
     hoverArmed_ = false;
     if (!GetCursorPos(&hoverBaseline_))
     {
@@ -1215,6 +1209,7 @@ void CandidatePresenter::Present()
             layoutH = lastLayoutHeightDip_;
         }
         scene->EnsureLayout({layoutW, layoutH});
+        UpdateExpandedNavigationLayout();
         scene->Render(impl_->resources);
     }
     if (backdropActive_ && impl_->card)

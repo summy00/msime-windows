@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ipc/candidate_ui_action_policy.h"
+
 #include "skin/candidate_skin_catalog.h"
 #include "window/candidate_skin_palette.h"
 #include "window/candidate_skin_tokens.h"
@@ -74,6 +76,7 @@ class CandidateExpandContent : public msimeui::Panel
     float GetGap() const;
     // 最近一次测量出的首行高度。
     float GetListExtent() const;
+    std::vector<FanyImeIpc::CandidateRowPosition> NavigationPositions() const;
 
     msimeui::SizeF Measure(const msimeui::SizeF &availableSize) override;
     void Arrange(const msimeui::RectF &finalRect) override;

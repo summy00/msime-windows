@@ -312,6 +312,22 @@ float CandidateExpandContent::GetListExtent() const
     return listExtent_;
 }
 
+std::vector<FanyImeIpc::CandidateRowPosition> CandidateExpandContent::NavigationPositions() const
+{
+    std::vector<FanyImeIpc::CandidateRowPosition> positions;
+    for (const auto *list : {list_, grid_})
+    {
+        if (list == grid_ && !showGrid_)
+            break;
+        for (size_t i = 0; list->GetItem(i); ++i)
+        {
+            const auto rect = list->GetItemBounds(i);
+            positions.push_back({rect.x + rect.width * 0.5f - bounds_.x, rect.y - bounds_.y, rect.width * 0.5f});
+        }
+    }
+    return positions;
+}
+
 msimeui::SizeF CandidateExpandContent::Measure(const msimeui::SizeF &availableSize)
 {
     const msimeui::SizeF list = list_->MeasureInLayout({availableSize.width, 1000000.0f});

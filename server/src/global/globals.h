@@ -306,6 +306,7 @@ struct CandidateUiState
     int selected_index_in_page = 0;
     // While expanded, selection stays relative to the original page and can reach its grid.
     int expanded_count = 0;
+    FanyImeIpc::CandidateArrowNavigation arrow_navigation;
     int item_total_count = 0;
     int cur_page_max_word_len = 2;
     int cur_page_item_cnt = 8;
@@ -315,6 +316,7 @@ struct CandidateUiState
 
     void set_items(std::vector<CandidateWordItem> new_items)
     {
+        arrow_navigation.Reset();
         items = std::move(new_items);
         item_total_count = static_cast<int>(items.size());
         page_index = 0;
@@ -336,6 +338,7 @@ struct CandidateUiState
 
     void select_first_on_page()
     {
+        arrow_navigation.Reset();
         selected_index_in_page = 0;
     }
 
@@ -346,6 +349,7 @@ struct CandidateUiState
 
     void collapse_expanded_selection()
     {
+        arrow_navigation.Reset();
         if (page_size > 0 && selected_index_in_page >= page_size)
         {
             const int absolute = current_page_start() + selected_index_in_page;
