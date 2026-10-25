@@ -330,6 +330,31 @@ std::vector<FanyImeIpc::CandidateRowPosition> CandidateExpandContent::Navigation
     return positions;
 }
 
+void CandidateExpandContent::SetShortcutLabels(const std::vector<int> &targets)
+{
+    size_t firstCount = 0;
+    size_t gridCount = 0;
+    while (list_->GetItem(firstCount))
+        ++firstCount;
+    while (grid_->GetItem(gridCount))
+        ++gridCount;
+    std::vector<std::wstring> firstLabels(firstCount);
+    std::vector<std::wstring> gridLabels(gridCount);
+    for (size_t i = 0; i < targets.size() && i < 9; ++i)
+    {
+        const int target = targets[i];
+        if (target < 0)
+            continue;
+        const size_t index = static_cast<size_t>(target);
+        if (index < firstCount)
+            firstLabels[index] = std::to_wstring(i + 1);
+        else if (index - firstCount < gridCount)
+            gridLabels[index - firstCount] = std::to_wstring(i + 1);
+    }
+    list_->SetItemLabels(firstLabels);
+    grid_->SetItemLabels(gridLabels);
+}
+
 msimeui::SizeF CandidateExpandContent::Measure(const msimeui::SizeF &availableSize)
 {
     const msimeui::SizeF list = list_->MeasureInLayout({availableSize.width, 1000000.0f});
@@ -692,6 +717,7 @@ CandidateSkinScene::Result CandidateSkinScene::Apply(const Settings &settings)
     appearance.rowFillPressed = tokens.selected;
     appearance.rowTextSelected = tokens.rowTextSelected;
     appearance.rowLabelSelected = tokens.rowLabelSelected;
+    appearance.reserveNumericLabels = expandBody_ != nullptr;
     list_->SetAppearance(appearance);
     list_->SetOrientation(horizontalLayout ? msimeui::CandidateList::Orientation::Horizontal
                                            : msimeui::CandidateList::Orientation::Vertical);
@@ -772,7 +798,7 @@ CandidateSkinScene::Result CandidateSkinScene::Apply(const Settings &settings)
         expandToggle_->SetMargin(
             {2.0f, (std::max)(0.0f, (appearance.itemHeight - toggleAppearance.buttonHeight) * 0.5f), 1.0f, 0.0f});
 
-        // 网格沿用首行的字体与行高，没有序号，按等宽列排开；点中即上屏。
+        // 网格沿用首行的字体与行高，编号跟随高亮行，按等宽列排开；点中即上屏。
         msimeui::CandidateList::Appearance gridAppearance = appearance;
         // Presenter 只在键盘高亮位于网格时显示选中态。
         gridAppearance.selectable = true;

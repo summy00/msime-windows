@@ -260,6 +260,7 @@ void ClearState();
 void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_epoch, int forced_index_in_page = -1,
                          bool count_first_word = true);
 void WaitForCandidateRenderSync(UINT keycode);
+int ResolveDigitCandidateIndex(UINT keycode);
 void ApplyCloudCandidate(const std::string &candidate, const std::string &pinyin, uint64_t generation,
                          const std::optional<metasequoia::OnlineQuery> &query);
 void ApplyRescoredOrder();

@@ -12,6 +12,34 @@ TEST_CASE(candidate_ui_action_accepts_exact_one_based_page_range)
     REQUIRE(!FanyImeIpc::IsValidCandidateUiOneBasedIndex(11));
 }
 
+TEST_CASE(candidate_digit_shortcuts_follow_the_highlighted_visual_row)
+{
+    const std::vector<FanyImeIpc::CandidateRowPosition> positions{{20, 0},      {60, 0},       {100, 0},
+                                                                  {40, 30, 38}, {100, 30, 18}, {20, 60, 18}};
+    REQUIRE(FanyImeIpc::CandidateRowShortcutTargets(positions, 0) == std::vector<int>({0, 1, 2}));
+    REQUIRE(FanyImeIpc::CandidateRowShortcutTargets(positions, 4) == std::vector<int>({3, 4}));
+    REQUIRE(FanyImeIpc::CandidateRowShortcutTargets(positions, 5) == std::vector<int>({5}));
+    REQUIRE(FanyImeIpc::CandidateRowShortcutTargets(positions, -1).empty());
+    REQUIRE(FanyImeIpc::CandidateRowShortcutTargets(positions, 6).empty());
+    REQUIRE(FanyImeIpc::CandidateRowShortcutTargets({}, 0).empty());
+}
+
+TEST_CASE(candidate_digit_shortcuts_follow_screen_order_and_limit_labels_to_supported_keys)
+{
+    std::vector<FanyImeIpc::CandidateRowPosition> positions;
+    for (int i = 11; i >= 0; --i)
+        positions.push_back({static_cast<float>(i * 40), 30.0f});
+    REQUIRE(FanyImeIpc::CandidateRowShortcutTargets(positions, 0) == std::vector<int>({11, 10, 9, 8, 7, 6, 5, 4, 3}));
+    for (const float scale : {1.0f, 1.25f, 1.5f, 2.0f})
+    {
+        const std::vector<FanyImeIpc::CandidateRowPosition> scaled{{20 * scale, -60 * scale},
+                                                                   {80 * scale, -60 * scale},
+                                                                   {40 * scale, -30 * scale},
+                                                                   {100 * scale, -30 * scale}};
+        REQUIRE(FanyImeIpc::CandidateRowShortcutTargets(scaled, 3) == std::vector<int>({2, 3}));
+    }
+}
+
 TEST_CASE(candidate_down_expands_once_even_before_the_ui_handles_the_request)
 {
     using FanyImeIpc::CandidateExpandState;

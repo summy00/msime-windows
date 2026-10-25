@@ -23,6 +23,7 @@ struct ExpandedPanel
         appearance.itemGap = 4.0f;
         appearance.minItemWidth = 60.0f;
         appearance.gridColumns = 4;
+        appearance.reserveNumericLabels = true;
         for (auto *control : {list.get(), grid.get()})
         {
             control->SetAppearance(appearance);
@@ -106,6 +107,127 @@ TEST_CASE(candidate_panel_left_right_visit_only_neighbors_in_the_same_actual_row
     }
 }
 
+TEST_CASE(candidate_panel_digit_labels_match_committed_indices_on_every_row)
+{
+    ExpandedPanel panel;
+    const auto positions = panel.content->NavigationPositions();
+    for (int current = 0; current < static_cast<int>(positions.size()); ++current)
+    {
+        const auto targets = FanyImeIpc::CandidateRowShortcutTargets(positions, current);
+        panel.content->SetShortcutLabels(targets);
+        Global::CandidateUiState state;
+        state.page_size = 4;
+        state.expanded_count = static_cast<int>(positions.size());
+        state.selected_index_in_page = current;
+        for (size_t i = 0; i < positions.size(); ++i)
+        {
+            const auto *item = i < 4 ? panel.list->GetItem(i) : panel.grid->GetItem(i - 4);
+            state.page_words.push_back(item->text);
+            const auto number = std::find(targets.begin(), targets.end(), static_cast<int>(i));
+            const std::wstring expected =
+                number == targets.end() ? std::wstring{} : std::to_wstring(number - targets.begin() + 1);
+            REQUIRE_EQ(item->label, expected);
+        }
+        auto page = std::make_shared<Global::CandidatePageSnapshot>();
+        page->generation = 42;
+        page->selected_index_in_page = current;
+        page->page_words = state.page_words;
+        Global::CandidateNavigationLayout layout{page, positions, targets};
+        for (uint32_t key = '1'; key <= '9'; ++key)
+        {
+            const size_t digit = key - '1';
+            const int expected = digit < targets.size() ? targets[digit] : -1;
+            REQUIRE_EQ(layout.DigitTarget(key, state, 42), expected);
+            if (expected >= 0)
+                REQUIRE_EQ(state.page_words[expected], expected < 4 ? panel.list->GetItem(expected)->text
+                                                                    : panel.grid->GetItem(expected - 4)->text);
+        }
+    }
+    const auto shortRow = FanyImeIpc::CandidateRowShortcutTargets(positions, 4);
+    REQUIRE(shortRow == std::vector<int>({4, 5, 6}));
+    const auto thirdRow = FanyImeIpc::CandidateRowShortcutTargets(positions, 8);
+    REQUIRE(thirdRow == std::vector<int>({7, 8, 9, 10}));
+}
+
+TEST_CASE(candidate_digit_shortcuts_reject_unpainted_or_stale_rows)
+{
+    Global::CandidateUiState state;
+    state.page_size = 4;
+    state.selected_index_in_page = 4;
+    state.page_words = {L"a", L"b", L"c", L"d", L"e", L"f"};
+    auto page = std::make_shared<Global::CandidatePageSnapshot>();
+    page->generation = 7;
+    page->selected_index_in_page = 4;
+    page->page_words = state.page_words;
+    Global::CandidateNavigationLayout layout{page, {{20, 0}, {60, 0}, {100, 0}, {140, 0}, {20, 30}, {60, 30}}, {4, 5}};
+    REQUIRE_EQ(layout.DigitTarget('1', state, 7), 4);
+    REQUIRE_EQ(layout.DigitTarget('2', state, 7), 5);
+    REQUIRE_EQ(layout.DigitTarget('3', state, 7), -1);
+    REQUIRE_EQ(layout.DigitTarget('0', state, 7), -1);
+    REQUIRE_EQ(layout.DigitTarget('A', state, 7), -1);
+    REQUIRE_EQ(layout.DigitTarget('1', state, 6), -1);
+    state.selected_index_in_page = 5;
+    REQUIRE_EQ(layout.DigitTarget('1', state, 7), -1);
+    state.selected_index_in_page = 4;
+    state.page_index = 1;
+    REQUIRE_EQ(layout.DigitTarget('1', state, 7), -1);
+    state.page_index = 0;
+    state.page_words[4] = L"changed";
+    REQUIRE_EQ(layout.DigitTarget('1', state, 7), -1);
+    state.page_words[4] = L"e";
+    layout.positions.pop_back();
+    REQUIRE_EQ(layout.DigitTarget('1', state, 7), -1);
+}
+
+TEST_CASE(candidate_row_digit_labels_do_not_reflow_the_panel_at_different_font_sizes)
+{
+    for (const float fontSize : {12.0f, 16.0f, 24.0f, 32.0f})
+        for (const float width : {200.0f, 316.0f, 480.0f})
+        {
+            ExpandedPanel panel;
+            msimeui::CandidateList::Appearance appearance;
+            appearance.fontSize = fontSize;
+            appearance.labelFontSize = fontSize * 0.8f;
+            appearance.itemHeight = fontSize * 1.75f;
+            appearance.itemGap = 4.0f;
+            appearance.minItemWidth = 60.0f;
+            appearance.gridColumns = 4;
+            appearance.reserveNumericLabels = true;
+            panel.list->SetAppearance(appearance);
+            panel.grid->SetAppearance(appearance);
+            panel.list->SetItemLabels({});
+            panel.Layout(width);
+            const auto before = panel.content->NavigationPositions();
+            for (int current = 0; current < static_cast<int>(before.size()); ++current)
+            {
+                panel.content->SetShortcutLabels(FanyImeIpc::CandidateRowShortcutTargets(before, current));
+                panel.Layout(width);
+                const auto after = panel.content->NavigationPositions();
+                REQUIRE_EQ(before.size(), after.size());
+                for (size_t i = 0; i < before.size(); ++i)
+                {
+                    REQUIRE(std::abs(before[i].center_x - after[i].center_x) < 0.01f);
+                    REQUIRE(std::abs(before[i].top - after[i].top) < 0.01f);
+                    REQUIRE(std::abs(before[i].half_width - after[i].half_width) < 0.01f);
+                }
+            }
+        }
+}
+
+TEST_CASE(candidate_label_updates_remeasure_when_the_label_exceeds_reserved_space)
+{
+    msimeui::CandidateList list;
+    list.SetOrientation(msimeui::CandidateList::Orientation::Horizontal);
+    list.SetItems({{L"", L"a", L"", L""}});
+    const auto before = list.MeasureInLayout({1000.0f, 1000.0f});
+    list.SetItemLabels({L"1000"});
+    const auto after = list.MeasureInLayout({1000.0f, 1000.0f});
+    REQUIRE(after.width > before.width);
+    REQUIRE_EQ(list.GetItem(0)->label, std::wstring(L"1000"));
+    list.SetItemLabels({});
+    REQUIRE(std::abs(list.MeasureInLayout({1000.0f, 1000.0f}).width - before.width) < 0.01f);
+}
+
 TEST_CASE(candidate_panel_navigation_coordinates_survive_scroll_and_relayout)
 {
     ExpandedPanel panel;
@@ -162,6 +284,23 @@ TEST_CASE(wechat_scroll_skin_keyboard_targets_match_the_final_scene_layout)
                 REQUIRE_EQ(positions.size(), size_t{54});
                 for (size_t i = 0; i < positions.size(); ++i)
                 {
+                    const auto shortcuts = FanyImeIpc::CandidateRowShortcutTargets(positions, static_cast<int>(i));
+                    scene.ExpandContent()->SetShortcutLabels(shortcuts);
+                    host.EnsureLayout({width, 320.0f});
+                    const auto numbered = scene.ExpandContent()->NavigationPositions();
+                    REQUIRE_EQ(numbered.size(), positions.size());
+                    for (size_t j = 0; j < positions.size(); ++j)
+                    {
+                        REQUIRE(std::abs(numbered[j].center_x - positions[j].center_x) < 0.01f);
+                        REQUIRE(std::abs(numbered[j].top - positions[j].top) < 0.01f);
+                    }
+                    for (size_t digit = 0; digit < shortcuts.size(); ++digit)
+                    {
+                        const size_t target = static_cast<size_t>(shortcuts[digit]);
+                        const auto *item =
+                            target < 4 ? scene.List()->GetItem(target) : scene.ExpandGrid()->GetItem(target - 4);
+                        REQUIRE_EQ(item->label, std::to_wstring(digit + 1));
+                    }
                     const auto rect = i < 4 ? scene.List()->GetItemBounds(i) : scene.ExpandGrid()->GetItemBounds(i - 4);
                     const auto content = scene.ExpandContent()->GetBounds();
                     REQUIRE(std::abs(rect.x + rect.width * 0.5f - content.x - positions[i].center_x) < 0.01f);

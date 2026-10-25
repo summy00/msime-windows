@@ -351,7 +351,7 @@ std::uint64_t CandidatePresenter::FillItemsFromUi()
         const auto &view = page->page_views[i];
         words.push_back({string_to_wstring(view.text), string_to_wstring(view.badge)});
         msimeui::CandidateList::Item item;
-        item.label = std::to_wstring(i + 1);
+        item.label = expanded_ ? std::wstring{} : std::to_wstring(i + 1);
         item.text = words.back().text + words.back().badge;
         item.annotation = string_to_wstring(view.annotation);
         if (translationsEnabled)
@@ -520,6 +520,8 @@ void CandidatePresenter::UpdateExpandedNavigationLayout()
     auto layout = std::make_shared<Global::CandidateNavigationLayout>();
     layout->page = page;
     layout->positions = impl_->expandContent->NavigationPositions();
+    layout->shortcut_targets = FanyImeIpc::CandidateRowShortcutTargets(layout->positions, page->selected_index_in_page);
+    impl_->expandContent->SetShortcutLabels(layout->shortcut_targets);
     std::shared_ptr<const Global::CandidateNavigationLayout> published = std::move(layout);
     std::atomic_store_explicit(&Global::candidate_navigation_layout, std::move(published), std::memory_order_release);
 }

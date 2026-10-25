@@ -651,6 +651,8 @@ class CandidateList : public Visual
         // most this many. An item wider than one column takes as many columns
         // as it needs. Ignored when the available width is unbounded.
         int gridColumns = 0;
+        // Keep single-digit label space when labels move between rows.
+        bool reserveNumericLabels = false;
         // false: no item is ever drawn as selected (no fill, bar or selected
         // colors), so every item, the first included, shows hover and press.
         bool selectable = true;
@@ -714,6 +716,7 @@ class CandidateList : public Visual
     void SetSelectedIndex(size_t index);
     size_t GetSelectedIndex() const;
     const Item *GetItem(size_t index) const;
+    void SetItemLabels(const std::vector<std::wstring> &labels);
     // 候选项相对窗口的最终矩形（含铺满后的行宽），供命中测试与布局校验使用。
     RectF GetItemBounds(size_t index) const;
     void SetSelectionVisible(bool visible);
@@ -750,6 +753,7 @@ class CandidateList : public Visual
     };
 
     float MeasureTextHeight(const std::wstring &text, float fontSize, float width) const;
+    float LabelWidth(const std::wstring &label) const;
     ItemGeometry MeasureItem(size_t index, float width) const;
     // The layout Render draws `text` with in `box`. Layouts are kept across
     // frames by text, size and box rather than by item: a selection move or a
@@ -776,6 +780,7 @@ class CandidateList : public Visual
     std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<IDWriteTextLayout>> textLayoutCache_;
     std::wstring textLayoutFamily_;
     float layoutWidth_ = 0.0f;
+    float reservedLabelWidth_ = 9.0f;
     Appearance appearance_{};
     bool selectionVisible_ = true;
     Orientation orientation_ = Orientation::Vertical;

@@ -487,6 +487,18 @@ struct CandidateNavigationLayout
 {
     CandidatePageSnapshotPtr page;
     std::vector<FanyImeIpc::CandidateRowPosition> positions;
+    std::vector<int> shortcut_targets;
+
+    int DigitTarget(uint32_t key, const CandidateUiState &current, uint64_t rendered_generation) const
+    {
+        if (!page || page->generation == 0 || page->generation > rendered_generation ||
+            page->page_index != current.page_index || page->selected_index_in_page != current.selected_index_in_page ||
+            page->page_words != current.page_words || positions.size() != current.page_words.size() || key < '1' ||
+            key > '9' || static_cast<size_t>(key - '1') >= shortcut_targets.size())
+            return -1;
+        const int target = shortcut_targets[static_cast<size_t>(key - '1')];
+        return target >= 0 && static_cast<size_t>(target) < current.page_words.size() ? target : -1;
+    }
 };
 // UI publishes the actual DIP layout; the worker owns the selection it describes.
 inline std::shared_ptr<const CandidateNavigationLayout> candidate_navigation_layout;

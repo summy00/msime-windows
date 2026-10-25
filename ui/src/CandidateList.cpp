@@ -105,6 +105,25 @@ void CandidateList::SetItems(std::vector<Item> items)
     InvalidateMeasure();
 }
 
+void CandidateList::SetItemLabels(const std::vector<std::wstring> &labels)
+{
+    bool changed = false;
+    bool remeasure = false;
+    for (size_t i = 0; i < items_.size(); ++i)
+    {
+        const std::wstring label = i < labels.size() ? labels[i] : std::wstring{};
+        if (items_[i].label == label)
+            continue;
+        remeasure = remeasure || LabelWidth(items_[i].label) != LabelWidth(label);
+        items_[i].label = label;
+        changed = true;
+    }
+    if (remeasure)
+        InvalidateMeasure();
+    else if (changed)
+        InvalidateVisual();
+}
+
 void CandidateList::ClearItems()
 {
     items_.clear();
@@ -348,12 +367,17 @@ float CandidateList::MeasureTextHeight(const std::wstring &text, float fontSize,
     return std::ceil(EstimateTextWidth(text, fontSize) / width) * fontSize * 1.25f;
 }
 
+float CandidateList::LabelWidth(const std::wstring &label) const
+{
+    return std::max(EstimateTextWidth(label, appearance_.labelFontSize), reservedLabelWidth_);
+}
+
 CandidateList::ItemGeometry CandidateList::MeasureItem(size_t index, float width) const
 {
     const auto &item = items_[index];
     ItemGeometry geometry;
     const float labelX = appearance_.contentPadLeft + appearance_.textPadLeft;
-    const float labelW = std::max(EstimateTextWidth(item.label, appearance_.labelFontSize), 9.0f);
+    const float labelW = LabelWidth(item.label);
     const float textX = labelX + labelW + appearance_.labelGap;
     const float contentWidth = std::max(width - textX - appearance_.contentPadRight, 1.0f);
     const float textW = std::min(std::max(EstimateTextWidth(item.text, appearance_.fontSize), 8.0f), contentWidth);
@@ -453,6 +477,11 @@ RectF CandidateList::GetItemBounds(size_t index) const
 SizeF CandidateList::Measure(const SizeF &availableSize)
 {
     itemGeometry_.clear();
+    reservedLabelWidth_ = 9.0f;
+    if (appearance_.reserveNumericLabels)
+        for (wchar_t digit = L'1'; digit <= L'9'; ++digit)
+            reservedLabelWidth_ =
+                std::max(reservedLabelWidth_, EstimateTextWidth(std::wstring(1, digit), appearance_.labelFontSize));
     const float availableWidth = std::max(availableSize.width, 1.0f);
     const float gap = appearance_.itemGap;
     const bool horizontal = orientation_ == Orientation::Horizontal;
@@ -481,9 +510,8 @@ SizeF CandidateList::Measure(const SizeF &availableSize)
             horizontal
                 ? std::max(textWidth, translationWidth)
                 : textWidth + (item.translation.empty() ? 0.0f : appearance_.fontSize * 0.65f + translationWidth);
-        float width = appearance_.contentPadLeft + appearance_.textPadLeft +
-                      std::max(EstimateTextWidth(item.label, appearance_.labelFontSize), 9.0f) + appearance_.labelGap +
-                      contentWidth + appearance_.contentPadRight;
+        float width = appearance_.contentPadLeft + appearance_.textPadLeft + LabelWidth(item.label) +
+                      appearance_.labelGap + contentWidth + appearance_.contentPadRight;
         if (grid)
         {
             const int span =

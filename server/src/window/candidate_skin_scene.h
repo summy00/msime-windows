@@ -77,6 +77,7 @@ class CandidateExpandContent : public msimeui::Panel
     // 最近一次测量出的首行高度。
     float GetListExtent() const;
     std::vector<FanyImeIpc::CandidateRowPosition> NavigationPositions() const;
+    void SetShortcutLabels(const std::vector<int> &targets);
 
     msimeui::SizeF Measure(const msimeui::SizeF &availableSize) override;
     void Arrange(const msimeui::RectF &finalRect) override;

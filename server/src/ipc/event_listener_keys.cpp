@@ -721,7 +721,14 @@ void HandleTranslationCommitKey(uint64_t client_id, uint64_t activation_epoch, u
 
     auto &ui = Global::candidate_ui;
     const int highlighted_position = (std::max)(0, ui.selected_index_in_page);
-    const int page_position = forced_index_in_page >= 0 ? forced_index_in_page : highlighted_position;
+    const int page_position = forced_index_in_page >= 0
+                                  ? ResolveDigitCandidateIndex(static_cast<UINT>('1' + forced_index_in_page))
+                                  : highlighted_position;
+    if (page_position < 0)
+    {
+        SendCurrentDataToClient(client_id, activation_epoch, request_id);
+        return;
+    }
     const size_t index = static_cast<size_t>(page_position);
     if (index >= ui.page_glosses.size())
     {

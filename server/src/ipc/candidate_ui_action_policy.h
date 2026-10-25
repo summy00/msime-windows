@@ -17,6 +17,22 @@ struct CandidateRowPosition
     float half_width = 0.0f;
 };
 
+inline std::vector<int> CandidateRowShortcutTargets(const std::vector<CandidateRowPosition> &positions, int selected)
+{
+    std::vector<int> targets;
+    if (selected < 0 || static_cast<size_t>(selected) >= positions.size())
+        return targets;
+    for (size_t i = 0; i < positions.size(); ++i)
+        if (std::abs(positions[i].top - positions[static_cast<size_t>(selected)].top) <= 0.5f)
+            targets.push_back(static_cast<int>(i));
+    std::stable_sort(targets.begin(), targets.end(), [&](int left, int right) {
+        return positions[static_cast<size_t>(left)].center_x < positions[static_cast<size_t>(right)].center_x;
+    });
+    if (targets.size() > 9)
+        targets.resize(9);
+    return targets;
+}
+
 inline int CandidateInAdjacentRow(const std::vector<CandidateRowPosition> &positions, int current, int direction,
                                   float column = std::numeric_limits<float>::quiet_NaN())
 {

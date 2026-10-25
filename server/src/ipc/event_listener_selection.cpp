@@ -169,6 +169,19 @@ void WaitForCandidateRenderSync(UINT keycode)
     CAND_DIAG_LOGF(L"candidate-select-render-synced keycode={} waited_ms={}", keycode, waitedMs);
 }
 
+int ResolveDigitCandidateIndex(UINT keycode)
+{
+    if (keycode < '1' || keycode > '9')
+        return -1;
+    if (IsUiLessMode() ||
+        Global::candidate_expand_state.load(std::memory_order_acquire) != FanyImeIpc::CandidateExpandState::Expanded)
+        return static_cast<int>(keycode - '1');
+    const auto layout = std::atomic_load_explicit(&Global::candidate_navigation_layout, std::memory_order_acquire);
+    return layout ? layout->DigitTarget(keycode, Global::candidate_ui,
+                                        Global::rendered_candidate_page_generation.load(std::memory_order_acquire))
+                  : -1;
+}
+
 void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_epoch, int forced_index_in_page,
                          bool count_first_word)
 {
@@ -189,7 +202,7 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
         auto &ui = Global::candidate_ui;
         const int index = forced_index_in_page >= 0
                               ? forced_index_in_page
-                              : (keycode == VK_SPACE ? ui.selected_index_in_page : static_cast<int>(keycode - '1'));
+                              : (keycode == VK_SPACE ? ui.selected_index_in_page : ResolveDigitCandidateIndex(keycode));
         if (index < 0 || static_cast<size_t>(index) >= ui.page_words.size())
         {
             // 这一页没有这个序号：什么都不上屏，译文页原样留着。走 SELECT_BY_NUMBER 的
@@ -217,13 +230,13 @@ void ProcessSelectionKey(UINT keycode, uint64_t client_id, uint64_t activation_e
     const bool is_space = keycode == VK_SPACE;
     const bool is_digit_selection = keycode >= '1' && keycode <= '9';
     const bool is_direct_selection = forced_index_in_page >= 0;
-    const int index = is_direct_selection
-                          ? forced_index_in_page
-                          : (is_space ? Global::candidate_ui.selected_index_in_page : static_cast<int>(keycode - '1'));
+    const int index = is_direct_selection ? forced_index_in_page
+                                          : (is_space ? Global::candidate_ui.selected_index_in_page
+                                                      : ResolveDigitCandidateIndex(keycode));
     WordItem curWordItem;
     const int page_size =
         Global::candidate_ui.page_size > 0 ? Global::candidate_ui.page_size : GetConfiguredCandidatePageSize();
-    const bool within_page_size = !is_digit_selection || index < page_size;
+    const bool within_page_size = !is_digit_selection || static_cast<int>(keycode - '1') < page_size;
     const bool is_valid_selection = within_page_size && (is_direct_selection || is_space || is_digit_selection) &&
                                     index >= 0 && static_cast<size_t>(index) < Global::candidate_ui.page_words.size() &&
                                     ResolveCandidateItem(index + 1, curWordItem);
